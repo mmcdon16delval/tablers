@@ -640,6 +640,7 @@ impl TfSettings {
         self.text_settings.expand_ligatures
     }
 
+    /// Returns the policy used to assign extracted text to table cells.
     #[getter]
     fn text_cell_assignment(&self) -> &'static str {
         Self::text_cell_assignment_enum_to_str(self.text_cell_assignment)
@@ -665,6 +666,7 @@ impl TfSettings {
         self.close_unclosed_boundaries
     }
 
+    /// Returns whether boundary closing extends incomplete existing outer edges.
     #[getter]
     fn extend_partial_outer_boundaries(&self) -> bool {
         self.extend_partial_outer_boundaries
@@ -804,6 +806,11 @@ impl TfSettings {
         self.text_settings.expand_ligatures = value;
     }
 
+    /// Sets the policy used to assign extracted text to table cells.
+    ///
+    /// # Errors
+    ///
+    /// Returns `PyValueError` for unsupported policy names.
     #[setter]
     fn set_text_cell_assignment(&mut self, value: &str) -> PyResult<()> {
         self.text_cell_assignment = Self::text_cell_assignment_str_to_enum(value)?;
@@ -830,6 +837,7 @@ impl TfSettings {
         self.close_unclosed_boundaries = value;
     }
 
+    /// Sets whether boundary closing extends incomplete existing outer edges.
     #[setter]
     fn set_extend_partial_outer_boundaries(&mut self, value: bool) {
         self.extend_partial_outer_boundaries = value;
