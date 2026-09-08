@@ -325,6 +325,19 @@ impl TfSettings {
         }
     }
 
+    /// Converts a Python-facing text-cell assignment name to its enum value.
+    ///
+    /// # Arguments
+    ///
+    /// * `value` - The assignment policy name.
+    ///
+    /// # Returns
+    ///
+    /// The matching text-cell assignment policy.
+    ///
+    /// # Errors
+    ///
+    /// Returns `PyValueError` when `value` is not `"char_center"` or `"word_overlap"`.
     fn text_cell_assignment_str_to_enum(value: &str) -> PyResult<TextCellAssignment> {
         match value {
             "char_center" => Ok(TextCellAssignment::CharCenter),
@@ -335,6 +348,15 @@ impl TfSettings {
         }
     }
 
+    /// Converts a text-cell assignment enum value to its Python-facing name.
+    ///
+    /// # Arguments
+    ///
+    /// * `value` - The assignment policy enum value.
+    ///
+    /// # Returns
+    ///
+    /// The stable string name of the assignment policy.
     fn text_cell_assignment_enum_to_str(value: TextCellAssignment) -> &'static str {
         match value {
             TextCellAssignment::CharCenter => "char_center",

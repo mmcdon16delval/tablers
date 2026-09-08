@@ -571,6 +571,7 @@ impl Table {
     /// * `chars` - Optional character array for text extraction.
     /// * `we_settings` - Optional word extraction settings.
     /// * `need_strip` - Whether to strip leading/trailing whitespace from cell text.
+    /// * `text_cell_assignment` - Policy used to assign source text to cells.
     ///
     /// # Returns
     ///
@@ -743,6 +744,15 @@ impl Table {
     }
 
     /// Returns the axis-aligned overlap area between two bounding boxes.
+    ///
+    /// # Arguments
+    ///
+    /// * `left` - The first bounding box.
+    /// * `right` - The second bounding box.
+    ///
+    /// # Returns
+    ///
+    /// The shared area, or zero when the boxes do not overlap.
     #[inline]
     fn bbox_overlap_area(left: &BboxKey, right: &BboxKey) -> OrderedFloat<f32> {
         let width = (left.2.min(right.2) - left.0.max(right.0)).max(OrderedFloat(0.0));
@@ -750,7 +760,20 @@ impl Table {
         width * height
     }
 
-    /// Join words in extraction order while preserving intentional word boundaries.
+    /// Joins words in extraction order while preserving intentional word boundaries.
+    ///
+    /// # Arguments
+    ///
+    /// * `words` - Words in PDF extraction order.
+    /// * `x_tol` - Horizontal gap tolerance used by the historical policy.
+    /// * `y_tol` - Vertical gap tolerance used by the historical policy.
+    /// * `need_strip` - Whether to remove leading and trailing whitespace.
+    /// * `preserve_word_boundaries` - Whether distinct extracted words receive a space unless
+    ///   punctuation or a line-ending hyphen requires attachment.
+    ///
+    /// # Returns
+    ///
+    /// Cell text reconstructed from the supplied words.
     fn words_to_text(
         words: &[Word],
         x_tol: f32,
@@ -788,7 +811,9 @@ impl Table {
         }
     }
 
-    /// Extract text using the historical character-center cell assignment policy.
+    /// Extracts cell text using the historical character-center assignment policy.
+    ///
+    /// Characters are assigned to cells before word formation, preserving existing output.
     fn extract_text_by_char_center(
         &mut self,
         chars: &[Char],
@@ -810,7 +835,11 @@ impl Table {
         }
     }
 
-    /// Extract words first, then assign each whole word to its greatest-overlap cell.
+    /// Extracts words first, then assigns each word to its greatest-overlap cell.
+    ///
+    /// A source token with at least two character centers in multiple cells is split along those
+    /// character groups. This preserves genuinely concatenated neighboring-cell values while a
+    /// one-character border spillover stays attached to the original word.
     fn extract_text_by_word_overlap(
         &mut self,
         chars: &[Char],
@@ -873,6 +902,7 @@ impl Table {
     /// * `chars` - The characters from the page.
     /// * `settings` - Optional word extraction settings.
     /// * `need_strip` - Whether to strip leading/trailing whitespace from cell text.
+    /// * `text_cell_assignment` - Policy used to assign source text to cells.
     pub fn extract_text(
         &mut self,
         chars: &[Char],
