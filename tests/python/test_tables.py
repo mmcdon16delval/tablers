@@ -1194,6 +1194,37 @@ class TestPartialOuterBoundaryPdf:
         assert "Sensor" not in {cell.text for cell in tables[0].cells}
 
 
+class TestWordOverlapCellAssignmentPdf:
+    """Integration tests for assigning a border-crossing word to one cell."""
+
+    def test_default_preserves_character_center_assignment(
+        self, word_overlap_cell_assignment_doc: Document
+    ) -> None:
+        """The default policy should preserve the historical split-word output."""
+        page = word_overlap_cell_assignment_doc.get_page(0)
+        tables = find_tables(page, extract_text=True)
+
+        assert len(tables) == 1
+        assert [[cell.text for cell in row] for row in tables[0].to_list()] == [
+            ["P", "RESSURE"],
+            ["Bottom left", "Bottom right"],
+        ]
+
+    def test_word_overlap_keeps_border_spillover_with_word(
+        self, word_overlap_cell_assignment_doc: Document
+    ) -> None:
+        """Word-overlap assignment should place the complete word in its best-overlap cell."""
+        page = word_overlap_cell_assignment_doc.get_page(0)
+        settings = TfSettings(text_cell_assignment="word_overlap")
+        tables = find_tables(page, extract_text=True, tf_settings=settings)
+
+        assert len(tables) == 1
+        assert [[cell.text for cell in row] for row in tables[0].to_list()] == [
+            ["", "PRESSURE"],
+            ["Bottom left", "Bottom right"],
+        ]
+
+
 class TestNarrowUnclosedPolylineAsEdgePdf:
     """Tests for #30-narrow-unclosed-polyline-as-edge.pdf.
 

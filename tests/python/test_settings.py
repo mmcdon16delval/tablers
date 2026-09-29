@@ -239,6 +239,21 @@ class TestTfSettings:
         )
         assert robust.extend_partial_outer_boundaries is True
 
+    def test_word_assignment_is_opt_in(self) -> None:
+        """Word assignment preserves the historical character-center default."""
+        defaults = TfSettings()
+        assert defaults.text_cell_assignment == "char_center"
+
+        robust = TfSettings(
+            text_cell_assignment="word_overlap",
+        )
+        assert robust.text_cell_assignment == "word_overlap"
+
+    def test_invalid_text_cell_assignment_raises(self) -> None:
+        """TfSettings rejects unknown text-to-cell assignment policies."""
+        with pytest.raises(ValueError, match="Invalid text_cell_assignment"):
+            TfSettings(text_cell_assignment="nearest")
+
 
 class TestNonNegativeValidation:
     """Tests for non-negative value validation in settings."""

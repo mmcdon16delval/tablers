@@ -68,6 +68,7 @@ class TfSettingItems(TypedDict, total=False):
     text_read_in_clockwise: bool
     text_split_at_punctuation: Literal["all"] | str | None
     text_expand_ligatures: bool
+    text_cell_assignment: Literal["char_center", "word_overlap"]
     explicit_h_edges: list[Edge] | None
     explicit_v_edges: list[Edge] | None
     exclude_background_colored_edges: bool

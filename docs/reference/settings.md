@@ -53,6 +53,7 @@ settings = TfSettings(
 | `exclude_background_colored_edges` | `bool` | `True` | Whether to exclude edges invisible against their immediate background (see below) |
 | `close_unclosed_boundaries` | `bool` | `True` | Whether to automatically detect and close tables whose outer edges are missing (see below) |
 | `extend_partial_outer_boundaries` | `bool` | `False` | Whether boundary closing also extends existing but incomplete outer edges |
+| `text_cell_assignment` | `str` | `"char_center"` | Assign text by historical character centers or whole-word overlap (`"word_overlap"`) |
 
 **Background-colored edge filtering** (`exclude_background_colored_edges`):
 
@@ -75,6 +76,8 @@ Once all virtual edges are synthesised, the full intersection-detection and cell
 `intersection_x_tolerance` and `intersection_y_tolerance` are used as thresholds when deciding whether an edge truly extends beyond the span. The feature is **skipped entirely** when either strategy is `"text"`, because text-derived edges can extend across table boundaries in ways that would produce false-positive extra columns or rows.
 
 Set `extend_partial_outer_boundaries=True` to make boundary closing extend an outer edge that exists but stops before the table's final row or column. It has no effect when `close_unclosed_boundaries=False` and remains opt-in because incomplete artwork can otherwise create false-positive cells.
+
+Set `text_cell_assignment="word_overlap"` when glyphs from one word cross a cell border. Tablers forms words before cell assignment and places each word in the cell containing the greatest portion of its bounding box. The default `"char_center"` retains historical output.
 
 ### Explicit Edges
 
@@ -141,7 +144,6 @@ settings = TfSettings(
     # Detection strategy
     vertical_strategy="lines",
     horizontal_strategy="lines",
-
     # Tolerance settings
     snap_x_tolerance=5.0,
     snap_y_tolerance=5.0,
@@ -149,7 +151,6 @@ settings = TfSettings(
     join_y_tolerance=3.0,
     intersection_x_tolerance=3.0,
     intersection_y_tolerance=3.0,
-
     # Edge detection
     edge_min_length=10.0,
     edge_min_length_prefilter=5.0,
@@ -157,12 +158,10 @@ settings = TfSettings(
     min_words_horizontal=1,
     exclude_background_colored_edges=True,
     close_unclosed_boundaries=True,
-
     # Table filtering
     include_single_cell=False,
     min_rows=2,
     min_columns=2,
-
     # Text extraction
     text_x_tolerance=3.0,
     text_y_tolerance=3.0,
@@ -264,12 +263,7 @@ with Document("example.pdf") as doc:
 ### With find_tables_from_cells
 
 ```python
-from tablers import (
-    Document,
-    find_all_cells_bboxes,
-    find_tables_from_cells,
-    WordsExtractSettings
-)
+from tablers import Document, find_all_cells_bboxes, find_tables_from_cells, WordsExtractSettings
 
 we_settings = WordsExtractSettings(
     x_tolerance=5.0,

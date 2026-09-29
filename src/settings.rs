@@ -150,6 +150,15 @@ impl BitAnd<StrategyType> for StrategyType {
     }
 }
 
+/// Policy used to assign extracted text to detected table cells.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TextCellAssignment {
+    /// Assign each character independently using its bounding-box center.
+    CharCenter,
+    /// Form words first and assign each whole word to the cell with greatest overlap.
+    WordOverlap,
+}
+
 /// Settings for table finding operations.
 ///
 /// Controls how edges are detected, snapped, joined, and how intersections
@@ -189,6 +198,8 @@ pub struct TfSettings {
     pub min_columns: Option<usize>,
     /// Settings for text/word extraction.
     pub text_settings: WordsExtractSettings,
+    /// Policy used to assign extracted text to table cells.
+    pub text_cell_assignment: TextCellAssignment,
     /// Explicit horizontal edges to include in table detection.
     pub explicit_h_edges: Option<Vec<Edge>>,
     /// Explicit vertical edges to include in table detection.
@@ -246,6 +257,7 @@ impl Default for TfSettings {
             min_rows: None,
             min_columns: None,
             text_settings: WordsExtractSettings::default(),
+            text_cell_assignment: TextCellAssignment::CharCenter,
             explicit_h_edges: None,
             explicit_v_edges: None,
             exclude_background_colored_edges: true,
@@ -310,6 +322,45 @@ impl TfSettings {
             StrategyType::LinesStrict => "lines_strict",
             StrategyType::Text => "text",
             StrategyType::Explicit => "explicit",
+        }
+    }
+
+    /// Converts a Python-facing text-cell assignment name to its enum value.
+    ///
+    /// # Arguments
+    ///
+    /// * `value` - The assignment policy name.
+    ///
+    /// # Returns
+    ///
+    /// The matching text-cell assignment policy.
+    ///
+    /// # Errors
+    ///
+    /// Returns `PyValueError` when `value` is not `"char_center"` or `"word_overlap"`.
+    fn text_cell_assignment_str_to_enum(value: &str) -> PyResult<TextCellAssignment> {
+        match value {
+            "char_center" => Ok(TextCellAssignment::CharCenter),
+            "word_overlap" => Ok(TextCellAssignment::WordOverlap),
+            _ => Err(PyValueError::new_err(format!(
+                "Invalid text_cell_assignment: {value}. Expected 'char_center' or 'word_overlap'."
+            ))),
+        }
+    }
+
+    /// Converts a text-cell assignment enum value to its Python-facing name.
+    ///
+    /// # Arguments
+    ///
+    /// * `value` - The assignment policy enum value.
+    ///
+    /// # Returns
+    ///
+    /// The stable string name of the assignment policy.
+    fn text_cell_assignment_enum_to_str(value: TextCellAssignment) -> &'static str {
+        match value {
+            TextCellAssignment::CharCenter => "char_center",
+            TextCellAssignment::WordOverlap => "word_overlap",
         }
     }
 }
@@ -427,6 +478,10 @@ impl TfSettings {
                     }
                     "text_expand_ligatures" => {
                         settings.text_settings.expand_ligatures = value.extract::<bool>().unwrap()
+                    }
+                    "text_cell_assignment" => {
+                        settings.text_cell_assignment =
+                            Self::text_cell_assignment_str_to_enum(value.extract::<&str>()?)?
                     }
                     "explicit_h_edges" => {
                         settings.explicit_h_edges = value.extract::<Option<Vec<Edge>>>().unwrap()
@@ -583,6 +638,12 @@ impl TfSettings {
     #[getter]
     fn text_expand_ligatures(&self) -> bool {
         self.text_settings.expand_ligatures
+    }
+
+    /// Returns the policy used to assign extracted text to table cells.
+    #[getter]
+    fn text_cell_assignment(&self) -> &'static str {
+        Self::text_cell_assignment_enum_to_str(self.text_cell_assignment)
     }
 
     #[getter]
@@ -745,6 +806,17 @@ impl TfSettings {
         self.text_settings.expand_ligatures = value;
     }
 
+    /// Sets the policy used to assign extracted text to table cells.
+    ///
+    /// # Errors
+    ///
+    /// Returns `PyValueError` for unsupported policy names.
+    #[setter]
+    fn set_text_cell_assignment(&mut self, value: &str) -> PyResult<()> {
+        self.text_cell_assignment = Self::text_cell_assignment_str_to_enum(value)?;
+        Ok(())
+    }
+
     #[setter]
     fn set_explicit_h_edges(&mut self, value: Option<Vec<Edge>>) {
         self.explicit_h_edges = value;
@@ -784,7 +856,7 @@ impl TfSettings {
              text_need_strip={}, text_x_tolerance={}, text_y_tolerance={}, \
              text_keep_blank_chars={}, text_use_text_flow={}, \
              text_read_in_clockwise={}, text_split_at_punctuation={:?}, \
-             text_expand_ligatures={}, \
+             text_expand_ligatures={}, text_cell_assignment='{}', \
              explicit_h_edges={}, explicit_v_edges={}, \
              exclude_background_colored_edges={}, \
              close_unclosed_boundaries={}, extend_partial_outer_boundaries={})",
@@ -811,6 +883,7 @@ impl TfSettings {
             self.text_settings.text_read_in_clockwise,
             self.text_split_at_punctuation(),
             self.text_settings.expand_ligatures,
+            Self::text_cell_assignment_enum_to_str(self.text_cell_assignment),
             self.explicit_h_edges
                 .as_ref()
                 .map_or("None".to_string(), |v| format!("[{} edges]", v.len())),
@@ -848,6 +921,7 @@ impl TfSettings {
                 && self.text_settings.text_read_in_clockwise
                     == other.text_settings.text_read_in_clockwise
                 && self.text_settings.expand_ligatures == other.text_settings.expand_ligatures
+                && self.text_cell_assignment == other.text_cell_assignment
                 && self.explicit_h_edges.as_ref().map(|v| v.len())
                     == other.explicit_h_edges.as_ref().map(|v| v.len())
                 && self.explicit_v_edges.as_ref().map(|v| v.len())
@@ -898,6 +972,7 @@ impl TfSettings {
             self.explicit_v_edges.clone(),
             self.exclude_background_colored_edges,
             self.close_unclosed_boundaries,
+            Self::text_cell_assignment_enum_to_str(self.text_cell_assignment).to_string(),
             self.extend_partial_outer_boundaries,
         );
         Ok((cls.getattr("_from_pickle")?, (part1, part2))
@@ -934,6 +1009,7 @@ impl TfSettings {
             Option<Vec<Edge>>,
             bool,
             bool,
+            String,
             bool,
         ),
     ) -> PyResult<Self> {
@@ -960,6 +1036,7 @@ impl TfSettings {
             explicit_v_edges,
             exclude_background_colored_edges,
             close_unclosed_boundaries,
+            text_cell_assignment,
             extend_partial_outer_boundaries,
         ) = part2;
         let ts = text_settings_state;
@@ -1000,6 +1077,7 @@ impl TfSettings {
                 expand_ligatures: ts.6,
                 need_strip: ts.7,
             },
+            text_cell_assignment: Self::text_cell_assignment_str_to_enum(&text_cell_assignment)?,
             explicit_h_edges,
             explicit_v_edges,
             exclude_background_colored_edges,
