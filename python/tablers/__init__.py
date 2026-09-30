@@ -121,19 +121,8 @@ def get_runtime(path: Path | str | None = None) -> PdfiumRuntime:
     return PdfiumRuntime(str(path))
 
 
-def _initialize_pdfium() -> None:
-    """Initialize process-global Pdfium without retaining a thread-bound PyO3 handle."""
-    _ = get_runtime()
-
-
-_initialize_pdfium()
-
-
-def __getattr__(name: str) -> PdfiumRuntime:
-    """Resolve the legacy PDFIUM_RT export on the requesting thread."""
-    if name == "PDFIUM_RT":
-        return get_runtime()
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+# Initialize native Pdfium without retaining a thread-bound Python handle.
+get_runtime()
 
 
 def _unwrap_page(page: Page | Pyo3Page | None) -> Pyo3Page | None:

@@ -11,8 +11,6 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-import pytest
-import tablers
 from tablers import (
     Document,
     PdfiumRuntime,
@@ -244,20 +242,12 @@ class TestRuntimeIntegration:
         assert len(results) == 20
         assert all(page_count == 1 for _, page_count in results)
 
-    @pytest.mark.parametrize("import_handle", [False, True])
-    def test_legacy_runtime_export_works_on_worker_thread(
-        self, edge_test_pdf_path: Path, import_handle: bool
-    ) -> None:
-        """Both legacy access forms should resolve a handle on the worker thread."""
+    def test_explicit_runtime_handle_works_on_worker_thread(self, edge_test_pdf_path: Path) -> None:
+        """Low-level callers should obtain a usable runtime on their own thread."""
 
         def inspect_document() -> int:
-            """Use and release the legacy handle entirely within its owning thread."""
-            if import_handle:
-                from tablers import PDFIUM_RT
-
-                runtime = PDFIUM_RT
-            else:
-                runtime = tablers.PDFIUM_RT
+            """Use and release an explicit handle entirely within its owning thread."""
+            runtime = get_runtime()
             document = Pyo3Doc(runtime, path=str(edge_test_pdf_path))
             try:
                 return document.page_count()
@@ -307,8 +297,9 @@ class TestRuntimeIntegration:
             results = []
 
             def inspect_document():
-                from tablers import Document
+                from tablers import Document, PdfiumRuntime
 
+                assert PdfiumRuntime.is_initialized()
                 with Document(path=sys.argv[1]) as document:
                     results.append(document.page_count)
 

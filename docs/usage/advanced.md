@@ -420,7 +420,7 @@ tablers is built on [pdfium-render](https://github.com/ajrcarey/pdfium-render), 
 
 The mutex makes multi-threaded access safe, not parallel: only one thread executes a Pdfium call at a time. Table detection work outside Pdfium may still run normally, but workloads seeking parallel PDF processing should use separate processes.
 
-The legacy `PDFIUM_RT` export resolves a fresh handle on the thread that accesses it. A handle captured with `from tablers import PDFIUM_RT` is still bound to that thread and must not be passed elsewhere; use `Document()` or resolve another handle on the destination worker instead.
+Low-level callers should use `get_runtime()` on the thread that needs the handle. The previous module-level `PDFIUM_RT` attribute has been removed; replace direct imports of it with `get_runtime()`. Runtime handles, like documents and pages, must not be passed between threads.
 
 ### Multi-Threaded Environments
 
