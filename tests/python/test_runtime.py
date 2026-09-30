@@ -11,9 +11,12 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+import pytest
+import tablers
 from tablers import (
     Document,
     PdfiumRuntime,
+    Pyo3Doc,
     find_tables,
     get_default_pdfium_path,
     get_runtime,
@@ -143,7 +146,7 @@ class TestPdfiumRuntimeReuse:
     def test_runtime_works_with_document(self) -> None:
         """Runtime obtained via get_runtime should work with Document."""
         _ = get_runtime()
-        # The global PDFIUM_RT uses this same mechanism
+        # Document resolves its own handle to the same native runtime.
         assert PdfiumRuntime.is_initialized()
 
 
@@ -152,7 +155,7 @@ class TestRuntimeIntegration:
 
     def test_document_uses_global_runtime(self, edge_test_pdf_path: Path) -> None:
         """Document should work with the global runtime."""
-        # Document class internally uses PDFIUM_RT which uses get_runtime()
+        # Document creates a current-thread handle through get_runtime().
         doc = Document(path=edge_test_pdf_path)
         assert not doc.is_closed()
         assert doc.page_count > 0
@@ -240,6 +243,52 @@ class TestRuntimeIntegration:
 
         assert len(results) == 20
         assert all(page_count == 1 for _, page_count in results)
+
+    @pytest.mark.parametrize("import_handle", [False, True])
+    def test_legacy_runtime_export_works_on_worker_thread(
+        self, edge_test_pdf_path: Path, import_handle: bool
+    ) -> None:
+        """Both legacy access forms should resolve a handle on the worker thread."""
+
+        def inspect_document() -> int:
+            """Use and release the legacy handle entirely within its owning thread."""
+            if import_handle:
+                from tablers import PDFIUM_RT
+
+                runtime = PDFIUM_RT
+            else:
+                runtime = tablers.PDFIUM_RT
+            document = Pyo3Doc(runtime, path=str(edge_test_pdf_path))
+            try:
+                return document.page_count()
+            finally:
+                document.close()
+
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            assert executor.submit(inspect_document).result(timeout=10) > 0
+
+    def test_concurrent_workers_extract_existing_table(self, edge_test_pdf_path: Path) -> None:
+        """Independent documents should retain table text when worker calls overlap."""
+        with Document(path=edge_test_pdf_path) as document:
+            expected = [
+                [[cell.text for cell in row] for row in table.to_list()]
+                for table in find_tables(document.get_page(0))
+            ]
+        assert expected
+        ready = threading.Barrier(4)
+
+        def extract_table() -> list[list[list[str]]]:
+            """Return detached table values after closing a worker-owned document."""
+            ready.wait(timeout=10)
+            with Document(path=edge_test_pdf_path) as document:
+                return [
+                    [[cell.text for cell in row] for row in table.to_list()]
+                    for table in find_tables(document.get_page(0))
+                ]
+
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            futures = [executor.submit(extract_table) for _ in range(4)]
+            assert all(future.result(timeout=10) == expected for future in futures)
 
     def test_first_import_on_worker_thread_shuts_down_cleanly(self, tmp_path: Path) -> None:
         """A fresh process should not retain an import-worker runtime until shutdown."""
