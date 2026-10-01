@@ -2315,6 +2315,8 @@ impl UnionFind {
 /// With `extend_partial_outer_boundaries` enabled, the frame also includes
 /// existing outer edges that stop short of its full span. A virtual edge fills
 /// each incomplete side, using the same intersection tolerances as missing edges.
+/// Endpoints within tolerance reuse the existing boundary coordinate so that
+/// extending a partial edge does not create a narrow extra row or column.
 ///
 /// Virtual h-edges span the full `[x_h_min, x_h_max]` range at the target y,
 /// and virtual v-edges span `[y_v_min, y_v_max]` at the target x.  Passing
@@ -2406,10 +2408,26 @@ fn compute_outer_frame_edges(
             continue;
         }
 
-        let left_x = x_h_min.min(x_int_min);
-        let right_x = x_h_max.max(x_int_max);
-        let top_y = y_v_min.min(y_int_min);
-        let bottom_y = y_v_max.max(y_int_max);
+        let left_x = if x_h_min < x_int_min - x_tol {
+            x_h_min
+        } else {
+            x_int_min
+        };
+        let right_x = if x_h_max > x_int_max + x_tol {
+            x_h_max
+        } else {
+            x_int_max
+        };
+        let top_y = if y_v_min < y_int_min - y_tol {
+            y_v_min
+        } else {
+            y_int_min
+        };
+        let bottom_y = if y_v_max > y_int_max + y_tol {
+            y_v_max
+        } else {
+            y_int_max
+        };
         let vertical_boundary_is_complete = |x: OrderedFloat<f32>| {
             v_idxs.iter().any(|&index| {
                 let edge = &v_edges[index];
