@@ -2,15 +2,50 @@
 Tests for PdfiumRuntime and related functionality.
 """
 
+import os
 import platform
+import subprocess
+import sys
+import textwrap
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from tablers import (
     Document,
     PdfiumRuntime,
+    Pyo3Doc,
+    find_tables,
     get_default_pdfium_path,
     get_runtime,
 )
+
+
+def _minimal_pdf_bytes() -> bytes:
+    """Build a synthetic one-page PDF without relying on a PDF test dependency."""
+    objects = (
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 300] /Contents 4 0 R >>",
+        b"<< /Length 0 >>\nstream\n\nendstream",
+    )
+    content = bytearray(b"%PDF-1.4\n%\xe2\xe3\xcf\xd3\n")
+    offsets = [0]
+    for number, body in enumerate(objects, start=1):
+        offsets.append(len(content))
+        content.extend(f"{number} 0 obj\n".encode())
+        content.extend(body)
+        content.extend(b"\nendobj\n")
+    xref_offset = len(content)
+    content.extend(f"xref\n0 {len(objects) + 1}\n".encode())
+    content.extend(b"0000000000 65535 f \n")
+    for offset in offsets[1:]:
+        content.extend(f"{offset:010d} 00000 n \n".encode())
+    content.extend(
+        f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\n"
+        f"startxref\n{xref_offset}\n%%EOF\n".encode()
+    )
+    return bytes(content)
 
 
 class TestGetDefaultPdfiumPath:
@@ -68,10 +103,9 @@ class TestGetRuntime:
         assert isinstance(runtime, PdfiumRuntime)
 
     def test_multiple_calls_succeed(self) -> None:
-        """Multiple calls to get_runtime should succeed (reusing instance)."""
+        """Multiple calls should create valid handles on the current thread."""
         runtime1 = get_runtime()
         runtime2 = get_runtime()
-        # Both should be valid PdfiumRuntime instances
         assert isinstance(runtime1, PdfiumRuntime)
         assert isinstance(runtime2, PdfiumRuntime)
 
@@ -110,7 +144,7 @@ class TestPdfiumRuntimeReuse:
     def test_runtime_works_with_document(self) -> None:
         """Runtime obtained via get_runtime should work with Document."""
         _ = get_runtime()
-        # The global PDFIUM_RT uses this same mechanism
+        # Document resolves its own handle to the same native runtime.
         assert PdfiumRuntime.is_initialized()
 
 
@@ -119,7 +153,7 @@ class TestRuntimeIntegration:
 
     def test_document_uses_global_runtime(self, edge_test_pdf_path: Path) -> None:
         """Document should work with the global runtime."""
-        # Document class internally uses PDFIUM_RT which uses get_runtime()
+        # Document creates a current-thread handle through get_runtime().
         doc = Document(path=edge_test_pdf_path)
         assert not doc.is_closed()
         assert doc.page_count > 0
@@ -151,3 +185,140 @@ class TestRuntimeIntegration:
         doc2 = Document(path=edge_test_pdf_path)
         assert doc2.page_count > 0
         doc2.close()
+
+    def test_concurrent_threads_repeatedly_open_synthetic_documents(self, tmp_path: Path) -> None:
+        """Independent thread runtimes should survive sustained Pdfium contention."""
+        pdf_bytes = _minimal_pdf_bytes()
+        pdf_path = tmp_path / "thread-contention.pdf"
+        pdf_path.write_bytes(pdf_bytes)
+        worker_count = 8
+        iterations = 20
+        ready = threading.Barrier(worker_count)
+
+        def hammer_runtime(worker_index: int) -> tuple[int, int]:
+            """Repeatedly open path and byte documents from one synchronized thread."""
+            runtime = get_runtime()
+            assert isinstance(runtime, PdfiumRuntime)
+            ready.wait(timeout=10)
+            completed = 0
+            for iteration in range(iterations):
+                if (worker_index + iteration) % 2 == 0:
+                    document = Document(path=pdf_path)
+                else:
+                    document = Document(bytes=pdf_bytes)
+                with document:
+                    page = document.get_page(0)
+                    assert document.page_count == 1
+                    assert page.width == 200
+                    assert page.height == 300
+                    page.extract_objects()
+                    assert find_tables(page) == []
+                    completed += 1
+            return threading.get_ident(), completed
+
+        with ThreadPoolExecutor(max_workers=worker_count) as executor:
+            results = list(executor.map(hammer_runtime, range(worker_count)))
+
+        assert len({thread_id for thread_id, _ in results}) == worker_count
+        assert all(completed == iterations for _, completed in results)
+
+    def test_replacement_worker_threads_get_fresh_runtime_handles(self, tmp_path: Path) -> None:
+        """Short-lived replacement workers should each create usable documents."""
+        pdf_path = tmp_path / "replacement-workers.pdf"
+        pdf_path.write_bytes(_minimal_pdf_bytes())
+        results: list[tuple[int, int]] = []
+
+        def inspect_document() -> None:
+            """Read the synthetic document entirely inside one short-lived thread."""
+            with Document(path=pdf_path) as document:
+                results.append((threading.get_ident(), document.page_count))
+
+        for _ in range(20):
+            worker = threading.Thread(target=inspect_document)
+            worker.start()
+            worker.join(timeout=10)
+            assert not worker.is_alive()
+
+        assert len(results) == 20
+        assert all(page_count == 1 for _, page_count in results)
+
+    def test_explicit_runtime_handle_works_on_worker_thread(self, edge_test_pdf_path: Path) -> None:
+        """Low-level callers should obtain a usable runtime on their own thread."""
+
+        def inspect_document() -> int:
+            """Use and release an explicit handle entirely within its owning thread."""
+            runtime = get_runtime()
+            document = Pyo3Doc(runtime, path=str(edge_test_pdf_path))
+            try:
+                return document.page_count()
+            finally:
+                document.close()
+
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            assert executor.submit(inspect_document).result(timeout=10) > 0
+
+    def test_concurrent_workers_extract_existing_table(self, edge_test_pdf_path: Path) -> None:
+        """Independent documents should retain table text when worker calls overlap."""
+        with Document(path=edge_test_pdf_path) as document:
+            expected = [
+                [[cell.text for cell in row] for row in table.to_list()]
+                for table in find_tables(document.get_page(0))
+            ]
+        assert expected
+        ready = threading.Barrier(4)
+
+        def extract_table() -> list[list[list[str]]]:
+            """Return detached table values after closing a worker-owned document."""
+            ready.wait(timeout=10)
+            with Document(path=edge_test_pdf_path) as document:
+                return [
+                    [[cell.text for cell in row] for row in table.to_list()]
+                    for table in find_tables(document.get_page(0))
+                ]
+
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            futures = [executor.submit(extract_table) for _ in range(4)]
+            assert all(future.result(timeout=10) == expected for future in futures)
+
+    def test_first_import_on_worker_thread_shuts_down_cleanly(self, tmp_path: Path) -> None:
+        """A fresh process should not retain an import-worker runtime until shutdown."""
+        pdf_path = tmp_path / "worker-first-import.pdf"
+        pdf_path.write_bytes(_minimal_pdf_bytes())
+        package_root = Path(sys.modules[Document.__module__].__file__).resolve().parent.parent
+        environment = os.environ.copy()
+        environment["PYTHONPATH"] = os.pathsep.join(
+            filter(None, (str(package_root), environment.get("PYTHONPATH", "")))
+        )
+        script = textwrap.dedent(
+            """
+            import sys
+            import threading
+
+            results = []
+
+            def inspect_document():
+                from tablers import Document, PdfiumRuntime
+
+                assert PdfiumRuntime.is_initialized()
+                with Document(path=sys.argv[1]) as document:
+                    results.append(document.page_count)
+
+            worker = threading.Thread(target=inspect_document)
+            worker.start()
+            worker.join(timeout=10)
+            if worker.is_alive() or results != [1]:
+                raise RuntimeError(f"worker result: {results!r}")
+            """
+        )
+
+        completed = subprocess.run(
+            [sys.executable, "-c", script, str(pdf_path)],
+            capture_output=True,
+            check=False,
+            env=environment,
+            text=True,
+            timeout=20,
+        )
+
+        assert completed.returncode == 0, completed.stderr
+        assert "unsendable" not in completed.stderr
